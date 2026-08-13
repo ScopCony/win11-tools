@@ -357,12 +357,31 @@ function New-SystemRestorePoint {
     Write-Host "`nTworze punkt przywracania systemu..." -ForegroundColor $colors.Info
     try {
         Enable-ComputerRestore -Drive "C:\" -ErrorAction SilentlyContinue
-        Checkpoint-Computer -Description "Win 11 Tools - przed optymalizacja" -RestorePointType "MODIFY_SETTINGS" -ErrorAction Stop
-        Write-Host "Punkt przywracania utworzony pomyslnie." -ForegroundColor $colors.Success
+        $restoreWarnings = @()
+        Checkpoint-Computer -Description "Win 11 Tools - przed optymalizacja" -RestorePointType "MODIFY_SETTINGS" `
+                            -ErrorAction Stop -WarningAction SilentlyContinue -WarningVariable restoreWarnings
+        if ($restoreWarnings.Count -gt 0) {
+            $warningText = $restoreWarnings -join " "
+            if ($warningText -match "24|1440|already been created|juz.*utworzon") {
+                Write-Host "  [POMIN]   Punkt z ostatnich 24 godzin juz istnieje." -ForegroundColor $colors.Warning
+            }
+            else {
+                Write-Host "  [BLAD]    Punkt nie zostal utworzony: $warningText" -ForegroundColor $colors.Error
+            }
+            return $false
+        }
+        Write-Host "  [OK]      Punkt przywracania utworzony pomyslnie." -ForegroundColor $colors.Success
+        return $true
     }
     catch {
-        Write-Host "Nie udalo sie utworzyc punktu przywracania: $($_.Exception.Message)" -ForegroundColor $colors.Warning
-        Write-Host "(Na LTSC ochrona systemu bywa domyslnie wylaczona)" -ForegroundColor $colors.DefaultText
+        $message = $_.Exception.Message
+        if ($message -match "24|1440|already been created|juz.*utworzon") {
+            Write-Host "  [POMIN]   Punkt z ostatnich 24 godzin juz istnieje." -ForegroundColor $colors.Warning
+            return $false
+        }
+        Write-Host "  [BLAD]    Nie udalo sie utworzyc punktu: $message" -ForegroundColor $colors.Error
+        Write-Host "            Na LTSC ochrona systemu bywa domyslnie wylaczona." -ForegroundColor $colors.DefaultText
+        return $false
     }
 }
 
@@ -415,6 +434,38 @@ $servicesToDisable = @(
     @{ Name = "PcaSvc";           Desc = "Program Compatibility Assistant" }
 )
 
+$tasksToDisable = @(
+    "\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser",
+    "\Microsoft\Windows\Application Experience\ProgramDataUpdater",
+    "\Microsoft\Windows\Autochk\Proxy",
+    "\Microsoft\Windows\Customer Experience Improvement Program\Consolidator",
+    "\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip",
+    "\Microsoft\Windows\Customer Experience Improvement Program\KernelCeipTask",
+    "\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector",
+    "\Microsoft\Windows\Feedback\Siuf\DmClient",
+    "\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload",
+    "\Microsoft\Windows\Windows Error Reporting\QueueReporting"
+)
+
+$uwpApps = @(
+    @{ Pattern = "*Microsoft.YourPhone*";                     Desc = "Phone Link" },
+    @{ Pattern = "*Microsoft.SkypeApp*";                      Desc = "Skype" },
+    @{ Pattern = "*Microsoft.MixedReality.Portal*";           Desc = "Mixed Reality Portal" },
+    @{ Pattern = "*Microsoft.GetHelp*";                       Desc = "Get Help" },
+    @{ Pattern = "*Microsoft.WindowsFeedbackHub*";            Desc = "Feedback Hub" },
+    @{ Pattern = "*Microsoft.Getstarted*";                    Desc = "Tips" },
+    @{ Pattern = "*Clipchamp.Clipchamp*";                     Desc = "Clipchamp" },
+    @{ Pattern = "*Microsoft.MicrosoftSolitaireCollection*";  Desc = "Solitaire" },
+    @{ Pattern = "*Microsoft.BingNews*";                      Desc = "News" },
+    @{ Pattern = "*Microsoft.BingWeather*";                   Desc = "Weather" },
+    @{ Pattern = "*Microsoft.MicrosoftOfficeHub*";            Desc = "Office Hub" },
+    @{ Pattern = "*Microsoft.People*";                        Desc = "People" },
+    @{ Pattern = "*Microsoft.Microsoft3DViewer*";             Desc = "3D Viewer" },
+    @{ Pattern = "*Microsoft.MSPaint*";                       Desc = "Paint 3D" },
+    @{ Pattern = "*Microsoft.WindowsAlarms*";                 Desc = "Alarms and Clock" },
+    @{ Pattern = "*MicrosoftTeams*";                          Desc = "Teams (consumer)" }
+)
+
 function Invoke-DisableServices {
     Write-Host "`n==== Wylaczanie zbednych uslug ====`n" -ForegroundColor $colors.Header
 
@@ -452,28 +503,22 @@ function Invoke-TelemetryTweaks {
     Write-Host "`n==== Telemetria i prywatnosc ====`n" -ForegroundColor $colors.Header
 
     Write-Host "  Ustawienia rejestru..." -ForegroundColor $colors.Info
-    Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" -Name "AllowTelemetry" -Value 0 | Out-Null
-    Set-RegistryValue -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection" -Name "AllowTelemetry" -Value 0 | Out-Null
-    Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo" -Name "DisabledByGroupPolicy" -Value 1 | Out-Null
-    Set-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" -Name "Enabled" -Value 0 | Out-Null
-    Set-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" -Name "SilentInstalledAppsEnabled" -Value 0 | Out-Null
-    Set-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" -Name "SystemPaneSuggestionsEnabled" -Value 0 | Out-Null
-    Write-Host "  [OK]      Telemetria wylaczona w rejestrze" -ForegroundColor $colors.Success
+    $registryResults = @(
+        (Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" -Name "AllowTelemetry" -Value 0),
+        (Set-RegistryValue -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection" -Name "AllowTelemetry" -Value 0),
+        (Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo" -Name "DisabledByGroupPolicy" -Value 1),
+        (Set-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" -Name "Enabled" -Value 0),
+        (Set-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" -Name "SilentInstalledAppsEnabled" -Value 0),
+        (Set-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" -Name "SystemPaneSuggestionsEnabled" -Value 0)
+    )
+    if ($registryResults -notcontains $false) {
+        Write-Host "  [OK]      Telemetria wylaczona w rejestrze" -ForegroundColor $colors.Success
+    }
+    else {
+        Write-Host "  [BLAD]    Nie wszystkie ustawienia telemetrii zostaly zapisane" -ForegroundColor $colors.Error
+    }
 
     Write-Host "`n  Wylaczanie zadan telemetrycznych..." -ForegroundColor $colors.Info
-    $tasksToDisable = @(
-        "\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser",
-        "\Microsoft\Windows\Application Experience\ProgramDataUpdater",
-        "\Microsoft\Windows\Autochk\Proxy",
-        "\Microsoft\Windows\Customer Experience Improvement Program\Consolidator",
-        "\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip",
-        "\Microsoft\Windows\Customer Experience Improvement Program\KernelCeipTask",
-        "\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector",
-        "\Microsoft\Windows\Feedback\Siuf\DmClient",
-        "\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload",
-        "\Microsoft\Windows\Windows Error Reporting\QueueReporting"
-    )
-
     foreach ($task in $tasksToDisable) {
         $taskName = Split-Path $task -Leaf
         $taskPath = (Split-Path $task -Parent) + "\"
@@ -489,25 +534,6 @@ function Invoke-TelemetryTweaks {
 
 function Invoke-RemoveBloatware {
     Write-Host "`n==== Usuwanie UWP bloatware ====`n" -ForegroundColor $colors.Header
-
-    $uwpApps = @(
-        @{ Pattern = "*Microsoft.YourPhone*";                     Desc = "Phone Link" },
-        @{ Pattern = "*Microsoft.SkypeApp*";                      Desc = "Skype" },
-        @{ Pattern = "*Microsoft.MixedReality.Portal*";           Desc = "Mixed Reality Portal" },
-        @{ Pattern = "*Microsoft.GetHelp*";                       Desc = "Get Help" },
-        @{ Pattern = "*Microsoft.WindowsFeedbackHub*";            Desc = "Feedback Hub" },
-        @{ Pattern = "*Microsoft.Getstarted*";                    Desc = "Tips" },
-        @{ Pattern = "*Clipchamp.Clipchamp*";                     Desc = "Clipchamp" },
-        @{ Pattern = "*Microsoft.MicrosoftSolitaireCollection*";  Desc = "Solitaire" },
-        @{ Pattern = "*Microsoft.BingNews*";                      Desc = "News" },
-        @{ Pattern = "*Microsoft.BingWeather*";                   Desc = "Weather" },
-        @{ Pattern = "*Microsoft.MicrosoftOfficeHub*";            Desc = "Office Hub" },
-        @{ Pattern = "*Microsoft.People*";                        Desc = "People" },
-        @{ Pattern = "*Microsoft.Microsoft3DViewer*";             Desc = "3D Viewer" },
-        @{ Pattern = "*Microsoft.MSPaint*";                       Desc = "Paint 3D" },
-        @{ Pattern = "*Microsoft.WindowsAlarms*";                 Desc = "Alarms and Clock" },
-        @{ Pattern = "*MicrosoftTeams*";                          Desc = "Teams (consumer)" }
-    )
 
     foreach ($app in $uwpApps) {
         $pkg = Get-AppxPackage -Name $app.Pattern -AllUsers -ErrorAction SilentlyContinue
@@ -545,14 +571,21 @@ function Invoke-WindowsUpdateControl {
 
     $wuPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
 
-    Set-RegistryValue -Path $wuPath -Name "AUOptions" -Value 2 | Out-Null
-    Set-RegistryValue -Path $wuPath -Name "NoAutoUpdate" -Value 0 | Out-Null
-    Set-RegistryValue -Path $wuPath -Name "NoAutoRebootWithLoggedOnUsers" -Value 1 | Out-Null
-    Set-RegistryValue -Path $wuPath -Name "AlwaysAutoRebootAtScheduledTime" -Value 0 | Out-Null
+    $registryResults = @(
+        (Set-RegistryValue -Path $wuPath -Name "AUOptions" -Value 2),
+        (Set-RegistryValue -Path $wuPath -Name "NoAutoUpdate" -Value 0),
+        (Set-RegistryValue -Path $wuPath -Name "NoAutoRebootWithLoggedOnUsers" -Value 1),
+        (Set-RegistryValue -Path $wuPath -Name "AlwaysAutoRebootAtScheduledTime" -Value 0)
+    )
 
-    Write-Host "  [OK]      Tryb: tylko powiadamiaj (bez auto-pobierania)" -ForegroundColor $colors.Success
-    Write-Host "  [OK]      Auto-restart z zalogowanym userem: wylaczony" -ForegroundColor $colors.Success
-    Write-Host "  [OK]      Wymuszony restart po terminie: wylaczony" -ForegroundColor $colors.Success
+    if ($registryResults -notcontains $false) {
+        Write-Host "  [OK]      Tryb: tylko powiadamiaj (bez auto-pobierania)" -ForegroundColor $colors.Success
+        Write-Host "  [OK]      Auto-restart z zalogowanym userem: wylaczony" -ForegroundColor $colors.Success
+        Write-Host "  [OK]      Wymuszony restart po terminie: wylaczony" -ForegroundColor $colors.Success
+    }
+    else {
+        Write-Host "  [BLAD]    Nie wszystkie ustawienia Windows Update zostaly zapisane" -ForegroundColor $colors.Error
+    }
     Write-Host "`n  [INFO]    Active Hours ustaw recznie:" -ForegroundColor $colors.Warning
     Write-Host "            Settings > Windows Update > Advanced options > Active hours" -ForegroundColor $colors.DefaultText
 }
@@ -562,37 +595,70 @@ function Invoke-UITweaks {
 
     $advancedPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
 
-    # Widgets
-    Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Dsh" -Name "AllowNewsAndInterests" -Value 0 | Out-Null
-    Set-RegistryValue -Path $advancedPath -Name "TaskbarDa" -Value 0 | Out-Null
-    Write-Host "  [OK]      Widgets wylaczone" -ForegroundColor $colors.Success
+    # Widgets - oficjalna polityka Microsoft (bez nieudokumentowanego TaskbarDa)
+    if (Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Dsh" -Name "AllowNewsAndInterests" -Value 0) {
+        Write-Host "  [OK]      Widgets wylaczone" -ForegroundColor $colors.Success
+    }
+    else {
+        Write-Host "  [BLAD]    Widgets nie zostaly wylaczone" -ForegroundColor $colors.Error
+    }
 
     # Copilot
-    Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" -Name "TurnOffWindowsCopilot" -Value 1 | Out-Null
-    Set-RegistryValue -Path $advancedPath -Name "ShowCopilotButton" -Value 0 | Out-Null
-    Write-Host "  [OK]      Copilot wylaczony" -ForegroundColor $colors.Success
+    $copilotResults = @(
+        (Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" -Name "TurnOffWindowsCopilot" -Value 1),
+        (Set-RegistryValue -Path $advancedPath -Name "ShowCopilotButton" -Value 0)
+    )
+    if ($copilotResults -notcontains $false) {
+        Write-Host "  [OK]      Copilot wylaczony" -ForegroundColor $colors.Success
+    }
+    else {
+        Write-Host "  [BLAD]    Nie wszystkie ustawienia Copilot zostaly zapisane" -ForegroundColor $colors.Error
+    }
 
     # Game Bar / GameDVR
-    Set-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" -Name "AppCaptureEnabled" -Value 0 | Out-Null
-    Set-RegistryValue -Path "HKCU:\System\GameConfigStore" -Name "GameDVR_Enabled" -Value 0 | Out-Null
-    Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR" -Name "AllowGameDVR" -Value 0 | Out-Null
-    Write-Host "  [OK]      Game Bar / GameDVR wylaczone" -ForegroundColor $colors.Success
+    $gameBarResults = @(
+        (Set-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" -Name "AppCaptureEnabled" -Value 0),
+        (Set-RegistryValue -Path "HKCU:\System\GameConfigStore" -Name "GameDVR_Enabled" -Value 0),
+        (Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR" -Name "AllowGameDVR" -Value 0)
+    )
+    if ($gameBarResults -notcontains $false) {
+        Write-Host "  [OK]      Game Bar / GameDVR wylaczone" -ForegroundColor $colors.Success
+    }
+    else {
+        Write-Host "  [BLAD]    Nie wszystkie ustawienia Game Bar zostaly zapisane" -ForegroundColor $colors.Error
+    }
 
     # Search icon
-    Set-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 | Out-Null
-    Write-Host "  [OK]      Ikona wyszukiwania ukryta" -ForegroundColor $colors.Success
+    if (Set-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0) {
+        Write-Host "  [OK]      Ikona wyszukiwania ukryta" -ForegroundColor $colors.Success
+    }
+    else {
+        Write-Host "  [BLAD]    Nie udalo sie ukryc ikony wyszukiwania" -ForegroundColor $colors.Error
+    }
 
     # Teams Chat icon
-    Set-RegistryValue -Path $advancedPath -Name "TaskbarMn" -Value 0 | Out-Null
-    Write-Host "  [OK]      Ikona Chat/Teams usunieta" -ForegroundColor $colors.Success
+    if (Set-RegistryValue -Path $advancedPath -Name "TaskbarMn" -Value 0) {
+        Write-Host "  [OK]      Ikona Chat/Teams usunieta" -ForegroundColor $colors.Success
+    }
+    else {
+        Write-Host "  [BLAD]    Nie udalo sie usunac ikony Chat/Teams" -ForegroundColor $colors.Error
+    }
 
     # Background apps
-    Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" -Name "LetAppsRunInBackground" -Value 2 | Out-Null
-    Write-Host "  [OK]      Aplikacje UWP w tle zablokowane" -ForegroundColor $colors.Success
+    if (Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" -Name "LetAppsRunInBackground" -Value 2) {
+        Write-Host "  [OK]      Aplikacje UWP w tle zablokowane" -ForegroundColor $colors.Success
+    }
+    else {
+        Write-Host "  [BLAD]    Aplikacje UWP w tle nie zostaly zablokowane" -ForegroundColor $colors.Error
+    }
 
     # Recall (jesli obecny)
-    Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" -Name "DisableAIDataAnalysis" -Value 1 | Out-Null
-    Write-Host "  [OK]      Windows Recall wylaczony" -ForegroundColor $colors.Success
+    if (Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" -Name "DisableAIDataAnalysis" -Value 1) {
+        Write-Host "  [OK]      Windows Recall wylaczony" -ForegroundColor $colors.Success
+    }
+    else {
+        Write-Host "  [BLAD]    Windows Recall nie zostal wylaczony" -ForegroundColor $colors.Error
+    }
 
     Write-Host "`n  Restart Explorera..." -ForegroundColor $colors.Info
     Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
@@ -1436,57 +1502,481 @@ function Invoke-PackageScan {
 
 # region STATUS
 
-function Show-Status {
-    Write-Host "`n==== Status optymalizacji ====`n" -ForegroundColor $colors.Header
+function New-AuditItem {
+    param(
+        [string]$Category,
+        [string]$Label,
+        [ValidateSet("ok", "missing", "na", "error")][string]$State,
+        [string]$Details = "",
+        [string]$RepairType = "",
+        [hashtable]$RepairData = @{}
+    )
 
-    Write-Host "-- Uslugi --" -ForegroundColor $colors.Highlight
-    $disabledCount = 0
-    $activeCount = 0
+    return [PSCustomObject]@{
+        Category   = $Category
+        Label      = $Label
+        State      = $State
+        Details    = $Details
+        RepairType = $RepairType
+        RepairData = $RepairData
+        Selected   = $false
+        RepairNo   = 0
+    }
+}
+
+function Get-RegistryAuditItem {
+    param(
+        [string]$Category,
+        [string]$Label,
+        [string]$Path,
+        [string]$Name,
+        $ExpectedValue,
+        [string]$Type = "DWord"
+    )
+
+    try {
+        if (-not (Test-Path $Path)) {
+            return (New-AuditItem -Category $Category -Label $Label -State "missing" `
+                    -Details "brak klucza; oczekiwano: $ExpectedValue" -RepairType "Registry" `
+                    -RepairData @{ Path = $Path; Name = $Name; Value = $ExpectedValue; Type = $Type })
+        }
+
+        $properties = Get-ItemProperty -Path $Path -ErrorAction Stop
+        $property = $properties.PSObject.Properties[$Name]
+        if ($null -eq $property) {
+            return (New-AuditItem -Category $Category -Label $Label -State "missing" `
+                    -Details "brak wartosci; oczekiwano: $ExpectedValue" -RepairType "Registry" `
+                    -RepairData @{ Path = $Path; Name = $Name; Value = $ExpectedValue; Type = $Type })
+        }
+
+        $current = $property.Value
+        if ($current -eq $ExpectedValue) {
+            return (New-AuditItem -Category $Category -Label $Label -State "ok" -Details "wartosc: $current")
+        }
+
+        return (New-AuditItem -Category $Category -Label $Label -State "missing" `
+                -Details "jest: $current; oczekiwano: $ExpectedValue" -RepairType "Registry" `
+                -RepairData @{ Path = $Path; Name = $Name; Value = $ExpectedValue; Type = $Type })
+    }
+    catch {
+        return (New-AuditItem -Category $Category -Label $Label -State "error" -Details $_.Exception.Message)
+    }
+}
+
+function Get-OptimizationAudit {
+    $items = [System.Collections.Generic.List[object]]::new()
+
+    # Uslugi
     foreach ($svc in $servicesToDisable) {
-        $service = Get-Service -Name $svc.Name -ErrorAction SilentlyContinue
-        if ($service) {
-            $startType = (Get-CimInstance -ClassName Win32_Service -Filter "Name='$($svc.Name)'" -ErrorAction SilentlyContinue).StartMode
-            if ($startType -eq "Disabled") {
-                $disabledCount++
+        try {
+            $service = Get-Service -Name $svc.Name -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $service) {
+                $items.Add((New-AuditItem -Category "Uslugi i RDP" -Label "$($svc.Name) - $($svc.Desc)" `
+                           -State "na" -Details "usluga nie wystepuje w tej wersji Windows"))
+                continue
+            }
+
+            $startType = $service.StartType.ToString()
+            $isOptimized = ($startType -eq "Disabled" -and $service.Status -eq "Stopped")
+            if ($isOptimized) {
+                $items.Add((New-AuditItem -Category "Uslugi i RDP" -Label "$($service.Name) - $($svc.Desc)" `
+                           -State "ok" -Details "Disabled / Stopped"))
             }
             else {
-                $activeCount++
-                Write-Host ("  [AKTYWNA] {0,-20} - {1}" -f $svc.Name, $startType) -ForegroundColor $colors.Warning
+                $items.Add((New-AuditItem -Category "Uslugi i RDP" -Label "$($service.Name) - $($svc.Desc)" `
+                           -State "missing" -Details "$startType / $($service.Status)" `
+                           -RepairType "ServiceDisabled" -RepairData @{ Name = $service.Name }))
+            }
+        }
+        catch {
+            $items.Add((New-AuditItem -Category "Uslugi i RDP" -Label "$($svc.Name) - $($svc.Desc)" `
+                       -State "error" -Details $_.Exception.Message))
+        }
+    }
+
+    $items.Add((Get-RegistryAuditItem -Category "Uslugi i RDP" -Label "Polaczenia RDP zablokowane" `
+               -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -ExpectedValue 1))
+
+    try {
+        $termService = Get-Service -Name "TermService" -ErrorAction SilentlyContinue
+        if (-not $termService) {
+            $items.Add((New-AuditItem -Category "Uslugi i RDP" -Label "TermService pozostaje na Manual" `
+                       -State "na" -Details "usluga nie wystepuje"))
+        }
+        else {
+            $termStartType = $termService.StartType.ToString()
+            if ($termStartType -eq "Manual") {
+                $items.Add((New-AuditItem -Category "Uslugi i RDP" -Label "TermService pozostaje na Manual" -State "ok"))
+            }
+            else {
+                $items.Add((New-AuditItem -Category "Uslugi i RDP" -Label "TermService pozostaje na Manual" `
+                           -State "missing" -Details "jest: $termStartType" -RepairType "ServiceManual" `
+                           -RepairData @{ Name = "TermService" }))
             }
         }
     }
-    Write-Host ("  Wylaczonych: {0} | Nadal aktywnych: {1}" -f $disabledCount, $activeCount) -ForegroundColor $colors.Info
-
-    Write-Host "`n-- Windows Update --" -ForegroundColor $colors.Highlight
-    $auOptions = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" -Name "AUOptions" -ErrorAction SilentlyContinue).AUOptions
-    if ($auOptions -eq 2) {
-        Write-Host "  [OK]      Tryb reczny (tylko powiadamiaj)" -ForegroundColor $colors.Success
-    }
-    else {
-        Write-Host "  [BRAK]    Nie skonfigurowano - uruchom opcje 4" -ForegroundColor $colors.Warning
+    catch {
+        $items.Add((New-AuditItem -Category "Uslugi i RDP" -Label "TermService pozostaje na Manual" `
+                   -State "error" -Details $_.Exception.Message))
     }
 
-    Write-Host "`n-- Interfejs --" -ForegroundColor $colors.Highlight
-    $copilot = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" -Name "TurnOffWindowsCopilot" -ErrorAction SilentlyContinue).TurnOffWindowsCopilot
-    if ($copilot -eq 1) {
-        Write-Host "  [OK]      Copilot wylaczony" -ForegroundColor $colors.Success
-    }
-    else {
-        Write-Host "  [BRAK]    Copilot aktywny - uruchom opcje 5" -ForegroundColor $colors.Warning
+    # Telemetria - rejestr
+    $telemetryRegistry = @(
+        @{ Label = "Telemetria (policy)"; Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection"; Name = "AllowTelemetry"; Value = 0 },
+        @{ Label = "Telemetria (system)"; Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection"; Name = "AllowTelemetry"; Value = 0 },
+        @{ Label = "Identyfikator reklamowy - polityka"; Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo"; Name = "DisabledByGroupPolicy"; Value = 1 },
+        @{ Label = "Identyfikator reklamowy - uzytkownik"; Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo"; Name = "Enabled"; Value = 0 },
+        @{ Label = "Ciche instalacje aplikacji"; Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name = "SilentInstalledAppsEnabled"; Value = 0 },
+        @{ Label = "Sugestie systemowe"; Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"; Name = "SystemPaneSuggestionsEnabled"; Value = 0 }
+    )
+    foreach ($entry in $telemetryRegistry) {
+        $items.Add((Get-RegistryAuditItem -Category "Telemetria i zadania" -Label $entry.Label `
+                   -Path $entry.Path -Name $entry.Name -ExpectedValue $entry.Value))
     }
 
+    # Telemetria - Harmonogram zadan
+    foreach ($task in $tasksToDisable) {
+        $taskName = Split-Path $task -Leaf
+        $taskPath = (Split-Path $task -Parent) + "\"
+        try {
+            $scheduledTask = Get-ScheduledTask -TaskPath $taskPath -TaskName $taskName -ErrorAction SilentlyContinue
+            if (-not $scheduledTask) {
+                $items.Add((New-AuditItem -Category "Telemetria i zadania" -Label "Zadanie: $taskName" `
+                           -State "na" -Details "zadanie nie wystepuje"))
+            }
+            elseif ($scheduledTask.State -eq "Disabled") {
+                $items.Add((New-AuditItem -Category "Telemetria i zadania" -Label "Zadanie: $taskName" -State "ok"))
+            }
+            else {
+                $items.Add((New-AuditItem -Category "Telemetria i zadania" -Label "Zadanie: $taskName" `
+                           -State "missing" -Details "stan: $($scheduledTask.State)" -RepairType "Task" `
+                           -RepairData @{ TaskPath = $taskPath; TaskName = $taskName }))
+            }
+        }
+        catch {
+            $items.Add((New-AuditItem -Category "Telemetria i zadania" -Label "Zadanie: $taskName" `
+                       -State "error" -Details $_.Exception.Message))
+        }
+    }
+
+    # UWP - jeden odczyt dla calej listy
+    $installedPackages = $null
+    $provisionedPackages = $null
+    $uwpReadError = $null
+    try {
+        $installedPackages = @(Get-AppxPackage -AllUsers -ErrorAction Stop)
+        $provisionedPackages = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop)
+    }
+    catch {
+        $uwpReadError = $_.Exception.Message
+    }
+
+    foreach ($app in $uwpApps) {
+        if ($uwpReadError) {
+            $items.Add((New-AuditItem -Category "UWP i OneDrive" -Label "$($app.Desc) usuniety" `
+                       -State "error" -Details $uwpReadError))
+            continue
+        }
+
+        $installed = @($installedPackages | Where-Object {
+            $_.Name -like $app.Pattern -or $_.PackageFullName -like $app.Pattern
+        })
+        $provisioned = @($provisionedPackages | Where-Object {
+            $_.DisplayName -like $app.Pattern -or $_.PackageName -like $app.Pattern
+        })
+
+        if ($installed.Count -eq 0 -and $provisioned.Count -eq 0) {
+            $items.Add((New-AuditItem -Category "UWP i OneDrive" -Label "$($app.Desc) usuniety" -State "ok"))
+        }
+        else {
+            $details = "zainstalowane: $($installed.Count); provisioned: $($provisioned.Count)"
+            $items.Add((New-AuditItem -Category "UWP i OneDrive" -Label "$($app.Desc) usuniety" `
+                       -State "missing" -Details $details -RepairType "UWP" `
+                       -RepairData @{ Pattern = $app.Pattern; Description = $app.Desc }))
+        }
+    }
+
+    try {
+        $oneDrivePaths = @(
+            "$env:LOCALAPPDATA\Microsoft\OneDrive\OneDrive.exe",
+            "$env:ProgramFiles\Microsoft OneDrive\OneDrive.exe",
+            "${env:ProgramFiles(x86)}\Microsoft OneDrive\OneDrive.exe"
+        )
+        $oneDriveFiles = @($oneDrivePaths | Where-Object { Test-Path -LiteralPath $_ })
+        $oneDriveProcess = @(Get-Process -Name "OneDrive" -ErrorAction SilentlyContinue)
+        $oneDriveEntries = @(Get-ItemProperty `
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*", `
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*", `
+            "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" `
+            -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*OneDrive*" })
+
+        if ($oneDriveFiles.Count -eq 0 -and $oneDriveProcess.Count -eq 0 -and $oneDriveEntries.Count -eq 0) {
+            $items.Add((New-AuditItem -Category "UWP i OneDrive" -Label "OneDrive odinstalowany" -State "ok"))
+        }
+        else {
+            $items.Add((New-AuditItem -Category "UWP i OneDrive" -Label "OneDrive odinstalowany" `
+                       -State "missing" -Details "wykryto skladniki OneDrive" -RepairType "OneDrive"))
+        }
+    }
+    catch {
+        $items.Add((New-AuditItem -Category "UWP i OneDrive" -Label "OneDrive odinstalowany" `
+                   -State "error" -Details $_.Exception.Message))
+    }
+
+    # Windows Update
+    $wuPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
+    $windowsUpdateRegistry = @(
+        @{ Label = "Tylko powiadamiaj o aktualizacjach"; Name = "AUOptions"; Value = 2 },
+        @{ Label = "Windows Update pozostaje wlaczony"; Name = "NoAutoUpdate"; Value = 0 },
+        @{ Label = "Brak restartu przy zalogowanym uzytkowniku"; Name = "NoAutoRebootWithLoggedOnUsers"; Value = 1 },
+        @{ Label = "Brak wymuszonego restartu po terminie"; Name = "AlwaysAutoRebootAtScheduledTime"; Value = 0 }
+    )
+    foreach ($entry in $windowsUpdateRegistry) {
+        $items.Add((Get-RegistryAuditItem -Category "Windows Update" -Label $entry.Label `
+                   -Path $wuPath -Name $entry.Name -ExpectedValue $entry.Value))
+    }
+
+    # Interfejs
+    $advancedPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+    $interfaceRegistry = @(
+        @{ Label = "Widgets wylaczone (oficjalna polityka)"; Path = "HKLM:\SOFTWARE\Policies\Microsoft\Dsh"; Name = "AllowNewsAndInterests"; Value = 0 },
+        @{ Label = "Copilot wylaczony"; Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"; Name = "TurnOffWindowsCopilot"; Value = 1 },
+        @{ Label = "Przycisk Copilot ukryty"; Path = $advancedPath; Name = "ShowCopilotButton"; Value = 0 },
+        @{ Label = "Nagrywanie Game Bar wylaczone"; Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR"; Name = "AppCaptureEnabled"; Value = 0 },
+        @{ Label = "GameDVR wylaczony"; Path = "HKCU:\System\GameConfigStore"; Name = "GameDVR_Enabled"; Value = 0 },
+        @{ Label = "GameDVR zablokowany polityka"; Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR"; Name = "AllowGameDVR"; Value = 0 },
+        @{ Label = "Wyszukiwanie ukryte na pasku"; Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Search"; Name = "SearchboxTaskbarMode"; Value = 0 },
+        @{ Label = "Ikona Chat/Teams ukryta"; Path = $advancedPath; Name = "TaskbarMn"; Value = 0 },
+        @{ Label = "Aplikacje UWP w tle zablokowane"; Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy"; Name = "LetAppsRunInBackground"; Value = 2 },
+        @{ Label = "Windows Recall wylaczony"; Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI"; Name = "DisableAIDataAnalysis"; Value = 1 }
+    )
+    foreach ($entry in $interfaceRegistry) {
+        $items.Add((Get-RegistryAuditItem -Category "Interfejs" -Label $entry.Label `
+                   -Path $entry.Path -Name $entry.Name -ExpectedValue $entry.Value))
+    }
+
+    return $items
+}
+
+function Show-AuditReport {
+    param($Items, [string]$Title = "Status optymalizacji")
+
+    Write-Host "`n==== $Title ====`n" -ForegroundColor $colors.Header
+    Write-Host "  [X] aktywne   [ ] cofnięte/brak   [-] niedostepne   [!] blad odczytu" -ForegroundColor $colors.DefaultText
+
+    $categories = @("Uslugi i RDP", "Telemetria i zadania", "UWP i OneDrive", "Windows Update", "Interfejs")
+    foreach ($category in $categories) {
+        Write-Host "`n-- $category --" -ForegroundColor $colors.Highlight
+        foreach ($item in @($Items | Where-Object { $_.Category -eq $category })) {
+            $marker = switch ($item.State) {
+                "ok"      { "[X]" }
+                "missing" { "[ ]" }
+                "na"      { "[-]" }
+                default   { "[!]" }
+            }
+            $color = switch ($item.State) {
+                "ok"      { $colors.Success }
+                "missing" { $colors.Warning }
+                "na"      { $colors.DefaultText }
+                default   { $colors.Error }
+            }
+            $suffix = if ($item.Details -and $item.State -ne "ok") { " - $($item.Details)" } else { "" }
+            Write-Host ("  {0} {1}{2}" -f $marker, $item.Label, $suffix) -ForegroundColor $color
+        }
+    }
+
+    $okCount = @($Items | Where-Object { $_.State -eq "ok" }).Count
+    $missingCount = @($Items | Where-Object { $_.State -eq "missing" }).Count
+    $naCount = @($Items | Where-Object { $_.State -eq "na" }).Count
+    $errorCount = @($Items | Where-Object { $_.State -eq "error" }).Count
+    Write-Host "`n  Aktywne: $okCount | Cofniete/brak: $missingCount | Niedostepne: $naCount | Bledy: $errorCount" -ForegroundColor $colors.Info
+    Write-Host "  Legenda: [X] aktywne | [ ] cofniete/brak | [-] niedostepne | [!] blad odczytu" -ForegroundColor $colors.DefaultText
+}
+
+function Show-RamStatus {
     Write-Host "`n-- RAM --" -ForegroundColor $colors.Highlight
-    $os = Get-CimInstance Win32_OperatingSystem
-    $free = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
-    $total = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)
-    $used = [math]::Round($total - $free, 1)
-    Write-Host ("  Uzyte: {0}GB / {1}GB" -f $used, $total) -ForegroundColor $colors.Info
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $computer = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+        $free = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
+        $total = [math]::Round($computer.TotalPhysicalMemory / 1GB, 1)
+        $used = [math]::Round($total - $free, 1)
+        Write-Host ("  Uzyte: {0}GB / {1}GB" -f $used, $total) -ForegroundColor $colors.Info
 
-    $topProcesses = Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 5
-    Write-Host "`n  Top 5 procesow (RAM):" -ForegroundColor $colors.Info
-    foreach ($proc in $topProcesses) {
-        $memMB = [math]::Round($proc.WorkingSet64 / 1MB, 0)
-        Write-Host ("    {0,-30} {1,6} MB" -f $proc.ProcessName, $memMB) -ForegroundColor $colors.DefaultText
+        $topProcesses = Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 5
+        Write-Host "`n  Top 5 procesow (RAM):" -ForegroundColor $colors.Info
+        foreach ($proc in $topProcesses) {
+            $memMB = [math]::Round($proc.WorkingSet64 / 1MB, 0)
+            Write-Host ("    {0,-30} {1,6} MB" -f $proc.ProcessName, $memMB) -ForegroundColor $colors.DefaultText
+        }
+    }
+    catch {
+        Write-Host "  [!] Nie udalo sie odczytac informacji o RAM: $($_.Exception.Message)" -ForegroundColor $colors.Error
+    }
+}
+
+function Select-AuditRepairs {
+    param($MissingItems)
+
+    $repairItems = @($MissingItems)
+    for ($i = 0; $i -lt $repairItems.Count; $i++) {
+        $repairItems[$i].Selected = $true
+        $repairItems[$i].RepairNo = $i + 1
+    }
+    $cursor = 0
+
+    while ($true) {
+        Clear-Host
+        Write-Host "==== Wybierz optymalizacje do naprawy ====`n" -ForegroundColor $colors.Header
+        Write-Host "  Strzalki = ruch | Spacja = zaznacz | N = wpisz numery | A = wszystkie" -ForegroundColor $colors.DefaultText
+        Write-Host "  0 = nic | Enter = dalej | Esc = anuluj`n" -ForegroundColor $colors.DefaultText
+
+        $lastCategory = ""
+        for ($i = 0; $i -lt $repairItems.Count; $i++) {
+            $item = $repairItems[$i]
+            if ($item.Category -ne $lastCategory) {
+                Write-Host "`n-- $($item.Category) --" -ForegroundColor $colors.Highlight
+                $lastCategory = $item.Category
+            }
+            $pointer = if ($i -eq $cursor) { ">" } else { " " }
+            $check = if ($item.Selected) { "[X]" } else { "[ ]" }
+            $color = if ($i -eq $cursor) { $colors.Warning } else { $colors.DefaultText }
+            Write-Host ("{0} {1,3}. {2} {3}" -f $pointer, $item.RepairNo, $check, $item.Label) -ForegroundColor $color
+        }
+
+        $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        switch ($key.VirtualKeyCode) {
+            38 { if ($cursor -gt 0) { $cursor-- } }
+            40 { if ($cursor -lt $repairItems.Count - 1) { $cursor++ } }
+            32 { $repairItems[$cursor].Selected = -not $repairItems[$cursor].Selected }
+            65 { foreach ($item in $repairItems) { $item.Selected = $true } }
+            48 { foreach ($item in $repairItems) { $item.Selected = $false } }
+            96 { foreach ($item in $repairItems) { $item.Selected = $false } }
+            78 {
+                $numbers = Read-Host "`nPodaj numery po przecinku (np. 1,3,8)"
+                foreach ($item in $repairItems) { $item.Selected = $false }
+                foreach ($part in $numbers.Split(',')) {
+                    $trimmed = $part.Trim()
+                    if ($trimmed -match "^\d+$") {
+                        $number = [int]$trimmed
+                        if ($number -ge 1 -and $number -le $repairItems.Count) {
+                            $repairItems[$number - 1].Selected = $true
+                        }
+                    }
+                }
+            }
+            13 { return @($repairItems | Where-Object { $_.Selected }) }
+            27 { return @() }
+        }
+    }
+}
+
+function Invoke-AuditRepair {
+    param($Item)
+
+    try {
+        switch ($Item.RepairType) {
+            "Registry" {
+                return (Set-RegistryValue -Path $Item.RepairData.Path -Name $Item.RepairData.Name `
+                        -Value $Item.RepairData.Value -Type $Item.RepairData.Type)
+            }
+            "ServiceDisabled" {
+                Stop-Service -Name $Item.RepairData.Name -Force -ErrorAction SilentlyContinue
+                Set-Service -Name $Item.RepairData.Name -StartupType Disabled -ErrorAction Stop
+                return $true
+            }
+            "ServiceManual" {
+                Set-Service -Name $Item.RepairData.Name -StartupType Manual -ErrorAction Stop
+                return $true
+            }
+            "Task" {
+                Disable-ScheduledTask -TaskPath $Item.RepairData.TaskPath -TaskName $Item.RepairData.TaskName `
+                                      -ErrorAction Stop | Out-Null
+                return $true
+            }
+            "UWP" {
+                $pattern = $Item.RepairData.Pattern
+                $packages = @(Get-AppxPackage -Name $pattern -AllUsers -ErrorAction Stop)
+                foreach ($package in $packages) {
+                    Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop
+                }
+                $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop | Where-Object {
+                    $_.DisplayName -like $pattern -or $_.PackageName -like $pattern
+                })
+                foreach ($package in $provisioned) {
+                    Remove-AppxProvisionedPackage -Online -PackageName $package.PackageName -ErrorAction Stop | Out-Null
+                }
+                return $true
+            }
+            "OneDrive" {
+                Stop-Process -Name "OneDrive" -Force -ErrorAction SilentlyContinue
+                $setupPaths = @(
+                    "$env:SystemRoot\SysWOW64\OneDriveSetup.exe",
+                    "$env:SystemRoot\System32\OneDriveSetup.exe"
+                )
+                $setup = $setupPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+                if (-not $setup) { throw "Nie znaleziono OneDriveSetup.exe" }
+                $process = Start-Process $setup -ArgumentList "/uninstall" -Wait -PassThru -ErrorAction Stop
+                if ($process.ExitCode -ne 0) { throw "Kod wyjscia deinstalatora: $($process.ExitCode)" }
+                return $true
+            }
+            default { throw "Nieznany typ naprawy: $($Item.RepairType)" }
+        }
+    }
+    catch {
+        Write-Host "    [BLAD] $($_.Exception.Message)" -ForegroundColor $colors.Error
+        return $false
+    }
+}
+
+function Show-Status {
+    $items = @(Get-OptimizationAudit)
+    Show-AuditReport -Items $items
+    Show-RamStatus
+
+    $missingItems = @($items | Where-Object { $_.State -eq "missing" -and $_.RepairType })
+    if ($missingItems.Count -eq 0) {
+        Write-Host "`n  Wszystkie dostepne optymalizacje sa aktywne." -ForegroundColor $colors.Success
+        return
+    }
+
+    $repairChoice = Read-Host "`nWykryto $($missingItems.Count) brakujacych ustawien. Wybrac elementy do naprawy? (y/n)"
+    if ($repairChoice -ne "y") { return }
+
+    $selectedItems = @(Select-AuditRepairs -MissingItems $missingItems)
+    if ($selectedItems.Count -eq 0) {
+        Write-Host "`n  Nie zaznaczono zadnych zmian." -ForegroundColor $colors.Warning
+        return
+    }
+
+    $attempted = 0
+    $categoryOrder = @("Uslugi i RDP", "Telemetria i zadania", "UWP i OneDrive", "Windows Update", "Interfejs")
+    foreach ($category in $categoryOrder) {
+        $categoryItems = @($selectedItems | Where-Object { $_.Category -eq $category })
+        if ($categoryItems.Count -eq 0) { continue }
+
+        Write-Host "`n-- Do naprawy: $category --" -ForegroundColor $colors.Highlight
+        foreach ($item in $categoryItems) { Write-Host "  [X] $($item.Label)" -ForegroundColor $colors.DefaultText }
+        $confirm = Read-Host "Naprawic zaznaczone elementy tej kategorii? (y/n)"
+        if ($confirm -ne "y") { continue }
+
+        foreach ($item in $categoryItems) {
+            Write-Host "  Naprawiam: $($item.Label)" -ForegroundColor $colors.Info
+            if (Invoke-AuditRepair -Item $item) {
+                Write-Host "    [OK] Zastosowano" -ForegroundColor $colors.Success
+            }
+            $attempted++
+        }
+    }
+
+    if ($attempted -gt 0) {
+        Write-Host "`n==== Ponowny audyt po naprawie ====" -ForegroundColor $colors.Header
+        $newItems = @(Get-OptimizationAudit)
+        Show-AuditReport -Items $newItems -Title "Status po naprawie"
+        Show-RamStatus
+    }
+    else {
+        Write-Host "`n  Nie zatwierdzono zadnej kategorii." -ForegroundColor $colors.Warning
     }
 }
 
@@ -1522,7 +2012,7 @@ do {
     Write-Host ""
     Write-Host "  -- System --" -ForegroundColor $colors.Header
     Write-Host " 10" -ForegroundColor $colors.Success -NoNewline
-    Write-Host ". Status - sprawdz co juz zrobione"
+    Write-Host ". Audyt optymalizacji - pelna lista i naprawa"
     Write-Host " 11" -ForegroundColor $colors.Success -NoNewline
     Write-Host ". Utworz punkt przywracania systemu"
     Write-Host ""
