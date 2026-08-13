@@ -10,6 +10,75 @@ $script:RepoUrl  = 'https://raw.githubusercontent.com/ScopCony/win11-tools/main'
 $script:SelfUrl  = "$($script:RepoUrl)/Win11Tools.ps1"
 # endregion
 
+# region Definicje kolorow
+$script:ColorSettingsPath = "HKCU:\Software\Win11Tools"
+
+function Get-SavedColorTheme {
+    try {
+        $savedTheme = (Get-ItemProperty -Path $script:ColorSettingsPath -Name "ColorTheme" -ErrorAction Stop).ColorTheme
+        if ($savedTheme -in @("Auto", "Black", "Blue")) {
+            return $savedTheme
+        }
+    }
+    catch {}
+
+    return "Auto"
+}
+
+function Get-AutomaticColorTheme {
+    try {
+        $backgroundColor = $Host.UI.RawUI.BackgroundColor.ToString()
+        if ($backgroundColor -in @("DarkBlue", "Blue")) {
+            return "Blue"
+        }
+    }
+    catch {}
+
+    return "Black"
+}
+
+function New-ColorPalette {
+    param([ValidateSet("Black", "Blue")][string]$Theme)
+
+    $palette = @{
+        Error         = "Red"
+        Success       = "Green"
+        Info          = "White"
+        DefaultText   = "Gray"
+        Muted         = "DarkGray"
+        Warning       = "Yellow"
+        LogoPrimary   = "Magenta"
+        LogoHot       = "Red"
+        LogoShadow    = "DarkRed"
+        LogoWarm      = "Yellow"
+        LogoBorder    = "DarkMagenta"
+        LogoCredit    = "DarkCyan"
+    }
+
+    if ($Theme -eq "Blue") {
+        $palette.Header = "Cyan"
+        $palette.Highlight = "Magenta"
+    }
+    else {
+        $palette.Header = "DarkRed"
+        $palette.Highlight = "Blue"
+    }
+
+    return $palette
+}
+
+function Set-ColorPalette {
+    param([ValidateSet("Auto", "Black", "Blue")][string]$Mode)
+
+    $effectiveTheme = if ($Mode -eq "Auto") { Get-AutomaticColorTheme } else { $Mode }
+    $script:ColorThemeMode = $Mode
+    $script:ActiveColorTheme = $effectiveTheme
+    $script:colors = New-ColorPalette -Theme $effectiveTheme
+}
+
+Set-ColorPalette -Mode (Get-SavedColorTheme)
+# endregion
+
 # region Konfiguracja protokolu sieciowego
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 # endregion
@@ -21,8 +90,8 @@ $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 
 if (-not $isAdmin) {
     Write-Host ""
-    Write-Host "  Skrypt wymaga uprawnien administratora." -ForegroundColor Yellow
-    Write-Host "  Uruchamiam ponownie w nowym oknie jako administrator..." -ForegroundColor Cyan
+    Write-Host "  Skrypt wymaga uprawnien administratora." -ForegroundColor $colors.Warning
+    Write-Host "  Uruchamiam ponownie w nowym oknie jako administrator..." -ForegroundColor $colors.Header
     Write-Host ""
 
     $relaunchCmd = "irm ('$($script:SelfUrl)?cache=' + (Get-Date).Ticks) | iex"
@@ -30,11 +99,11 @@ if (-not $isAdmin) {
 
     try {
         Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded
-        Write-Host "  Nowe okno otwarte. Mozesz zamknac to okno." -ForegroundColor Green
+        Write-Host "  Nowe okno otwarte. Mozesz zamknac to okno." -ForegroundColor $colors.Success
     }
     catch {
-        Write-Host "  Nie udalo sie podniesc uprawnien: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host "  Uruchom PowerShell jako administrator i sprobuj ponownie." -ForegroundColor Red
+        Write-Host "  Nie udalo sie podniesc uprawnien: $($_.Exception.Message)" -ForegroundColor $colors.Error
+        Write-Host "  Uruchom PowerShell jako administrator i sprobuj ponownie." -ForegroundColor $colors.Error
     }
     return
 }
@@ -43,18 +112,6 @@ if (-not $isAdmin) {
 # region Wymuszenie kodowania
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
-# endregion
-
-# region Definicje kolorow
-$colors = @{
-    Error       = "Red"
-    Success     = "Green"
-    Highlight   = "Blue"
-    Header      = "DarkRed"
-    Info        = "White"
-    DefaultText = "Gray"
-    Warning     = "Yellow"
-}
 # endregion
 
 # region LOGO
@@ -188,7 +245,7 @@ function Convert-ToAsciiArt {
 function Show-SunsetLogo {
     param([string]$Text)
 
-    $sunsetColors = @('Red', 'Red', 'Red', 'DarkRed', 'DarkRed')
+    $sunsetColors = @($colors.LogoHot, $colors.LogoHot, $colors.LogoHot, $colors.LogoShadow, $colors.LogoShadow)
     $asciiLines = Convert-ToAsciiArt $Text
 
     for ($i = 0; $i -lt $asciiLines.Count; $i++) {
@@ -202,39 +259,39 @@ Clear-Host
 
 try {
     $loadingChars = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
-    Write-Host "  Tworzenie logo " -ForegroundColor Yellow -NoNewline
+    Write-Host "  Tworzenie logo " -ForegroundColor $colors.Warning -NoNewline
     for ($i = 0; $i -lt 3; $i++) {
-        Write-Host $loadingChars[$i] -ForegroundColor Cyan -NoNewline
+        Write-Host $loadingChars[$i] -ForegroundColor $colors.Header -NoNewline
         Start-Sleep -Milliseconds 150
         Write-Host "`b" -NoNewline
     }
-    Write-Host "✓" -ForegroundColor Green
+    Write-Host "✓" -ForegroundColor $colors.Success
     Write-Host ""
 
     Show-SunsetLogo "WIN 11 TOOL"
     Show-SunsetLogo "BY SCOPCONY"
 
     Write-Host ""
-    Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor DarkMagenta
-    Write-Host "║                                                                ║" -ForegroundColor DarkMagenta
-    Write-Host "║                     === SUNSET EDITION ===                     ║" -ForegroundColor Yellow
-    Write-Host "║                                                                ║" -ForegroundColor DarkMagenta
-    Write-Host "║             Windows 11 Optimization & Debloat Tool             ║" -ForegroundColor White
-    Write-Host "║                                                                ║" -ForegroundColor DarkMagenta
-    Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor DarkMagenta
+    Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor $colors.LogoBorder
+    Write-Host "║                                                                ║" -ForegroundColor $colors.LogoBorder
+    Write-Host "║                     === SUNSET EDITION ===                     ║" -ForegroundColor $colors.LogoWarm
+    Write-Host "║                                                                ║" -ForegroundColor $colors.LogoBorder
+    Write-Host "║             Windows 11 Optimization & Debloat Tool             ║" -ForegroundColor $colors.Info
+    Write-Host "║                                                                ║" -ForegroundColor $colors.LogoBorder
+    Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor $colors.LogoBorder
 }
 catch {
     Write-Host ""
-    Write-Host "  ██╗    ██╗██╗███╗   ██╗     ██╗ ██╗    ████████╗ ██████╗  ██████╗ ██╗     " -ForegroundColor Magenta
-    Write-Host "  ██║    ██║██║████╗  ██║    ███║███║    ╚══██╔══╝██╔═══██╗██╔═══██╗██║     " -ForegroundColor Red
-    Write-Host "  ██║ █╗ ██║██║██╔██╗ ██║    ╚██║╚██║       ██║   ██║   ██║██║   ██║██║     " -ForegroundColor DarkRed
-    Write-Host "  ██║███╗██║██║██║╚██╗██║     ██║ ██║       ██║   ██║   ██║██║   ██║██║     " -ForegroundColor Yellow
-    Write-Host "  ╚███╔███╔╝██║██║ ╚████║     ██║ ██║       ██║   ╚██████╔╝╚██████╔╝███████╗" -ForegroundColor DarkYellow
-    Write-Host "   ╚══╝╚══╝ ╚═╝╚═╝  ╚═══╝     ╚═╝ ╚═╝       ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝" -ForegroundColor White
+    Write-Host "  ██╗    ██╗██╗███╗   ██╗     ██╗ ██╗    ████████╗ ██████╗  ██████╗ ██╗     " -ForegroundColor $colors.LogoPrimary
+    Write-Host "  ██║    ██║██║████╗  ██║    ███║███║    ╚══██╔══╝██╔═══██╗██╔═══██╗██║     " -ForegroundColor $colors.LogoHot
+    Write-Host "  ██║ █╗ ██║██║██╔██╗ ██║    ╚██║╚██║       ██║   ██║   ██║██║   ██║██║     " -ForegroundColor $colors.LogoShadow
+    Write-Host "  ██║███╗██║██║██║╚██╗██║     ██║ ██║       ██║   ██║   ██║██║   ██║██║     " -ForegroundColor $colors.LogoWarm
+    Write-Host "  ╚███╔███╔╝██║██║ ╚████║     ██║ ██║       ██║   ╚██████╔╝╚██████╔╝███████╗" -ForegroundColor $colors.LogoWarm
+    Write-Host "   ╚══╝╚══╝ ╚═╝╚═╝  ╚═══╝     ╚═╝ ╚═╝       ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝" -ForegroundColor $colors.Info
 }
 
 Write-Host ""
-Write-Host "                    by ScopCony 2026 $([char]0x00A9)                       " -ForegroundColor DarkCyan
+Write-Host "                    by ScopCony 2026 $([char]0x00A9)                       " -ForegroundColor $colors.LogoCredit
 Write-Host ""
 
 # endregion
@@ -277,7 +334,7 @@ function Format-TableLine {
     return $text
 }
 
-Write-Host "+===============[ OVERVIEW ]================+" -ForegroundColor Cyan
+Write-Host "+===============[ OVERVIEW ]================+" -ForegroundColor $colors.Header
 
 Write-Host (Format-TableLine ("| User: " + $currentUser)) -NoNewline
 Write-Host "|"
@@ -288,7 +345,7 @@ Write-Host "|"
 Write-Host (Format-TableLine ("| PowerShell: " + $powerShellVersion)) -NoNewline
 Write-Host "|"
 
-Write-Host "+==============[ HARDWARE ]================+" -ForegroundColor Cyan
+Write-Host "+==============[ HARDWARE ]================+" -ForegroundColor $colors.Header
 
 $cpuLine = "| Processor: " + $processorInfo.Substring(0, [Math]::Min(25, $processorInfo.Length))
 Write-Host (Format-TableLine $cpuLine) -NoNewline
@@ -297,13 +354,13 @@ Write-Host "|"
 $cpuUsageLine = "| CPU Usage: " + $cpuLoad + "%"
 if ($cpuLoad -isnot [double] -and $cpuLoad -isnot [int]) {
     $cpuUsageLine = "| CPU Usage: brak odczytu"
-    Write-Host (Format-TableLine $cpuUsageLine) -NoNewline -ForegroundColor DarkGray
+    Write-Host (Format-TableLine $cpuUsageLine) -NoNewline -ForegroundColor $colors.Muted
 } elseif ($cpuLoad -gt 80) {
-    Write-Host (Format-TableLine $cpuUsageLine) -NoNewline -ForegroundColor Red
+    Write-Host (Format-TableLine $cpuUsageLine) -NoNewline -ForegroundColor $colors.Error
 } elseif ($cpuLoad -gt 60) {
-    Write-Host (Format-TableLine $cpuUsageLine) -NoNewline -ForegroundColor Yellow
+    Write-Host (Format-TableLine $cpuUsageLine) -NoNewline -ForegroundColor $colors.Warning
 } else {
-    Write-Host (Format-TableLine $cpuUsageLine) -NoNewline -ForegroundColor Green
+    Write-Host (Format-TableLine $cpuUsageLine) -NoNewline -ForegroundColor $colors.Success
 }
 Write-Host "|"
 
@@ -314,15 +371,15 @@ if ($videoCard) {
 }
 
 $memoryLine = "| RAM: " + $usedRAM + "GB / " + $totalRAM + "GB"
-Write-Host (Format-TableLine $memoryLine) -NoNewline -ForegroundColor Green
+Write-Host (Format-TableLine $memoryLine) -NoNewline -ForegroundColor $colors.Success
 Write-Host "|"
 
-Write-Host "+===============[ NETWORK ]================+" -ForegroundColor Cyan
+Write-Host "+===============[ NETWORK ]================+" -ForegroundColor $colors.Header
 
 Write-Host (Format-TableLine ("| IP Address: " + $networkAdapter)) -NoNewline
 Write-Host "|"
 
-Write-Host "+==============[ STORAGE ]================+" -ForegroundColor Cyan
+Write-Host "+==============[ STORAGE ]================+" -ForegroundColor $colors.Header
 
 foreach ($disk in $diskList) {
     $totalSize = [math]::Round($disk.Size / 1GB, 0)
@@ -330,14 +387,14 @@ foreach ($disk in $diskList) {
     $usedSpace = $totalSize - $freeSpace
     $diskPercent = [math]::Round(($usedSpace / $totalSize) * 100, 1)
 
-    $diskColor = "Green"
+    $diskColor = $colors.Success
     $diskStatus = ""
     if ($diskPercent -ge 90) {
-        $diskColor = "Red"
+        $diskColor = $colors.Error
         $diskStatus = " [CRITICAL]"
     }
     elseif ($diskPercent -ge 75) {
-        $diskColor = "Yellow"
+        $diskColor = $colors.Warning
         $diskStatus = " [WARNING]"
     }
 
@@ -346,12 +403,69 @@ foreach ($disk in $diskList) {
     Write-Host "|"
 }
 
-Write-Host "+==========================================+" -ForegroundColor Cyan
+Write-Host "+==========================================+" -ForegroundColor $colors.Header
 Write-Host ""
 
 # endregion
 
 # region FUNKCJE POMOCNICZE
+
+function Get-ColorThemeLabel {
+    param([string]$Theme)
+
+    switch ($Theme) {
+        "Auto"  { return "Auto" }
+        "Black" { return "Czarne tlo" }
+        "Blue"  { return "Niebieskie tlo" }
+        default { return $Theme }
+    }
+}
+
+function Select-ColorTheme {
+    Write-Host "`n==== Motyw kolorow ====`n" -ForegroundColor $colors.Header
+    Write-Host "  Ustawienie: " -NoNewline
+    Write-Host (Get-ColorThemeLabel $script:ColorThemeMode) -ForegroundColor $colors.Highlight
+    Write-Host "  Aktywna paleta: " -NoNewline
+    Write-Host (Get-ColorThemeLabel $script:ActiveColorTheme) -ForegroundColor $colors.Highlight
+    Write-Host ""
+    Write-Host "  1" -ForegroundColor $colors.Success -NoNewline
+    Write-Host ". Auto - wykryj kolor tla"
+    Write-Host "  2" -ForegroundColor $colors.Success -NoNewline
+    Write-Host ". Czarne tlo - dotychczasowe kolory"
+    Write-Host "  3" -ForegroundColor $colors.Success -NoNewline
+    Write-Host ". Niebieskie tlo - kolory o wyzszym kontrascie"
+    Write-Host "  q" -ForegroundColor $colors.Success -NoNewline
+    Write-Host ". Powrot"
+
+    $choice = Read-Host "`nWybierz motyw"
+    $selectedMode = switch ($choice) {
+        "1" { "Auto" }
+        "2" { "Black" }
+        "3" { "Blue" }
+        "q" { return }
+        default {
+            Write-Host "Nieprawidlowy wybor." -ForegroundColor $colors.Error
+            return
+        }
+    }
+
+    Set-ColorPalette -Mode $selectedMode
+
+    try {
+        if (-not (Test-Path $script:ColorSettingsPath)) {
+            New-Item -Path $script:ColorSettingsPath -Force -ErrorAction Stop | Out-Null
+        }
+        New-ItemProperty -Path $script:ColorSettingsPath -Name "ColorTheme" -Value $selectedMode `
+                         -PropertyType String -Force -ErrorAction Stop | Out-Null
+        Write-Host "`n  [OK] Motyw zapisany: $(Get-ColorThemeLabel $selectedMode)" -ForegroundColor $colors.Success
+    }
+    catch {
+        Write-Host "`n  [UWAGA] Motyw zmieniono tylko na te sesje." -ForegroundColor $colors.Warning
+        Write-Host "          Nie udalo sie zapisac ustawienia: $($_.Exception.Message)" -ForegroundColor $colors.DefaultText
+    }
+
+    Write-Host "  Aktywna paleta: $(Get-ColorThemeLabel $script:ActiveColorTheme)" -ForegroundColor $colors.Info
+}
 
 function New-SystemRestorePoint {
     Write-Host "`nTworze punkt przywracania systemu..." -ForegroundColor $colors.Info
@@ -1985,8 +2099,13 @@ function Show-Status {
 # region MENU GLOWNE
 
 do {
+    $themeSummary = Get-ColorThemeLabel $script:ColorThemeMode
+    if ($script:ColorThemeMode -eq "Auto") {
+        $themeSummary += " -> $(Get-ColorThemeLabel $script:ActiveColorTheme)"
+    }
+
     Write-Host ""
-    Write-Host "==== Glowne Menu ====" -ForegroundColor Cyan
+    Write-Host "==== Glowne Menu ====" -ForegroundColor $colors.Header
     Write-Host ""
     Write-Host "  -- Optymalizacja --" -ForegroundColor $colors.Header
     Write-Host "  1" -ForegroundColor $colors.Success -NoNewline
@@ -2015,6 +2134,8 @@ do {
     Write-Host ". Audyt optymalizacji - pelna lista i naprawa"
     Write-Host " 11" -ForegroundColor $colors.Success -NoNewline
     Write-Host ". Utworz punkt przywracania systemu"
+    Write-Host " 12" -ForegroundColor $colors.Success -NoNewline
+    Write-Host ". Motyw kolorow ($themeSummary)"
     Write-Host ""
     Write-Host "  q" -ForegroundColor $colors.Success -NoNewline
     Write-Host ". Zakoncz"
@@ -2037,10 +2158,10 @@ do {
                 Invoke-WindowsUpdateControl
                 Invoke-UITweaks
 
-                Write-Host "`n=====================================================" -ForegroundColor Cyan
+                Write-Host "`n=====================================================" -ForegroundColor $colors.Header
                 Write-Host " PELNA OPTYMALIZACJA ZAKONCZONA" -ForegroundColor $colors.Success
                 Write-Host " Zalecany PELNY RESTART komputera." -ForegroundColor $colors.Warning
-                Write-Host "=====================================================" -ForegroundColor Cyan
+                Write-Host "=====================================================" -ForegroundColor $colors.Header
             }
             Read-Host "`nNacisnij Enter, aby kontynuowac..."
         }
@@ -2054,6 +2175,7 @@ do {
         "9" { Invoke-PackageScan }
         "10" { Show-Status;                Read-Host "`nNacisnij Enter, aby kontynuowac..." }
         "11" { New-SystemRestorePoint;     Read-Host "`nNacisnij Enter, aby kontynuowac..." }
+        "12" { Select-ColorTheme;           Read-Host "`nNacisnij Enter, aby kontynuowac..." }
         "q" {
             Write-Host "`nZamykanie Win 11 Tools. Do widzenia!" -ForegroundColor $colors.Success
             break
