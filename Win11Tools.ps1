@@ -26,6 +26,27 @@ function Get-SavedColorTheme {
 }
 
 function Get-AutomaticColorTheme {
+    # PowerShell ISE nie zawsze zwraca prawdziwe tlo przez RawUI.
+    # Jego wlasne ustawienia maja pierwszenstwo.
+    try {
+        $iseVariable = Get-Variable -Name "psISE" -ErrorAction SilentlyContinue
+        if ($null -ne $iseVariable -and $null -ne $iseVariable.Value) {
+            $iseBackground = $iseVariable.Value.Options.ConsolePaneTextBackgroundColor
+            if ($null -eq $iseBackground -or $iseBackground.A -eq 0) {
+                $iseBackground = $iseVariable.Value.Options.ConsolePaneBackgroundColor
+            }
+
+            if ($null -ne $iseBackground) {
+                $isBlue = ([int]$iseBackground.B -ge 32) -and `
+                          ([int]$iseBackground.B -gt ([int]$iseBackground.R + 15)) -and `
+                          ([int]$iseBackground.B -gt ([int]$iseBackground.G + 15))
+                if ($isBlue) { return "Blue" }
+                return "Black"
+            }
+        }
+    }
+    catch {}
+
     try {
         $backgroundColor = $Host.UI.RawUI.BackgroundColor.ToString()
         if ($backgroundColor -in @("DarkBlue", "Blue")) {
@@ -53,6 +74,7 @@ function New-ColorPalette {
         LogoWarm      = "Yellow"
         LogoBorder    = "DarkMagenta"
         LogoCredit    = "DarkCyan"
+        Structure     = "Cyan"
     }
 
     if ($Theme -eq "Blue") {
@@ -91,7 +113,7 @@ $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 if (-not $isAdmin) {
     Write-Host ""
     Write-Host "  Skrypt wymaga uprawnien administratora." -ForegroundColor $colors.Warning
-    Write-Host "  Uruchamiam ponownie w nowym oknie jako administrator..." -ForegroundColor $colors.Header
+    Write-Host "  Uruchamiam ponownie w nowym oknie jako administrator..." -ForegroundColor $colors.Structure
     Write-Host ""
 
     $relaunchCmd = "irm ('$($script:SelfUrl)?cache=' + (Get-Date).Ticks) | iex"
@@ -261,7 +283,7 @@ try {
     $loadingChars = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
     Write-Host "  Tworzenie logo " -ForegroundColor $colors.Warning -NoNewline
     for ($i = 0; $i -lt 3; $i++) {
-        Write-Host $loadingChars[$i] -ForegroundColor $colors.Header -NoNewline
+        Write-Host $loadingChars[$i] -ForegroundColor $colors.Structure -NoNewline
         Start-Sleep -Milliseconds 150
         Write-Host "`b" -NoNewline
     }
@@ -334,7 +356,7 @@ function Format-TableLine {
     return $text
 }
 
-Write-Host "+===============[ OVERVIEW ]================+" -ForegroundColor $colors.Header
+Write-Host "+===============[ OVERVIEW ]================+" -ForegroundColor $colors.Structure
 
 Write-Host (Format-TableLine ("| User: " + $currentUser)) -NoNewline
 Write-Host "|"
@@ -345,7 +367,7 @@ Write-Host "|"
 Write-Host (Format-TableLine ("| PowerShell: " + $powerShellVersion)) -NoNewline
 Write-Host "|"
 
-Write-Host "+==============[ HARDWARE ]================+" -ForegroundColor $colors.Header
+Write-Host "+==============[ HARDWARE ]================+" -ForegroundColor $colors.Structure
 
 $cpuLine = "| Processor: " + $processorInfo.Substring(0, [Math]::Min(25, $processorInfo.Length))
 Write-Host (Format-TableLine $cpuLine) -NoNewline
@@ -374,12 +396,12 @@ $memoryLine = "| RAM: " + $usedRAM + "GB / " + $totalRAM + "GB"
 Write-Host (Format-TableLine $memoryLine) -NoNewline -ForegroundColor $colors.Success
 Write-Host "|"
 
-Write-Host "+===============[ NETWORK ]================+" -ForegroundColor $colors.Header
+Write-Host "+===============[ NETWORK ]================+" -ForegroundColor $colors.Structure
 
 Write-Host (Format-TableLine ("| IP Address: " + $networkAdapter)) -NoNewline
 Write-Host "|"
 
-Write-Host "+==============[ STORAGE ]================+" -ForegroundColor $colors.Header
+Write-Host "+==============[ STORAGE ]================+" -ForegroundColor $colors.Structure
 
 foreach ($disk in $diskList) {
     $totalSize = [math]::Round($disk.Size / 1GB, 0)
@@ -403,7 +425,7 @@ foreach ($disk in $diskList) {
     Write-Host "|"
 }
 
-Write-Host "+==========================================+" -ForegroundColor $colors.Header
+Write-Host "+==========================================+" -ForegroundColor $colors.Structure
 Write-Host ""
 
 # endregion
@@ -415,8 +437,8 @@ function Get-ColorThemeLabel {
 
     switch ($Theme) {
         "Auto"  { return "Auto" }
-        "Black" { return "Czarne tlo" }
-        "Blue"  { return "Niebieskie tlo" }
+        "Black" { return "Oryginalne - czarne tlo" }
+        "Blue"  { return "Kontrastowe - niebieskie tlo" }
         default { return $Theme }
     }
 }
@@ -431,9 +453,9 @@ function Select-ColorTheme {
     Write-Host "  1" -ForegroundColor $colors.Success -NoNewline
     Write-Host ". Auto - wykryj kolor tla"
     Write-Host "  2" -ForegroundColor $colors.Success -NoNewline
-    Write-Host ". Czarne tlo - dotychczasowe kolory"
+    Write-Host ". Oryginalne kolory - czarne tlo"
     Write-Host "  3" -ForegroundColor $colors.Success -NoNewline
-    Write-Host ". Niebieskie tlo - kolory o wyzszym kontrascie"
+    Write-Host ". Kontrastowe kolory - niebieskie tlo"
     Write-Host "  q" -ForegroundColor $colors.Success -NoNewline
     Write-Host ". Powrot"
 
@@ -2105,7 +2127,7 @@ do {
     }
 
     Write-Host ""
-    Write-Host "==== Glowne Menu ====" -ForegroundColor $colors.Header
+    Write-Host "==== Glowne Menu ====" -ForegroundColor $colors.Structure
     Write-Host ""
     Write-Host "  -- Optymalizacja --" -ForegroundColor $colors.Header
     Write-Host "  1" -ForegroundColor $colors.Success -NoNewline
@@ -2158,10 +2180,10 @@ do {
                 Invoke-WindowsUpdateControl
                 Invoke-UITweaks
 
-                Write-Host "`n=====================================================" -ForegroundColor $colors.Header
+                Write-Host "`n=====================================================" -ForegroundColor $colors.Structure
                 Write-Host " PELNA OPTYMALIZACJA ZAKONCZONA" -ForegroundColor $colors.Success
                 Write-Host " Zalecany PELNY RESTART komputera." -ForegroundColor $colors.Warning
-                Write-Host "=====================================================" -ForegroundColor $colors.Header
+                Write-Host "=====================================================" -ForegroundColor $colors.Structure
             }
             Read-Host "`nNacisnij Enter, aby kontynuowac..."
         }
